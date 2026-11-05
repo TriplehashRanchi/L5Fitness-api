@@ -1,0 +1,21 @@
+{
+  "name": "l5fitness-api",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TriplehashRanchi/L5Fitness-api.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/TriplehashRanchi/L5Fitness-api/issues"
+  },
+  "homepage": "https://github.com/TriplehashRanchi/L5Fitness-api#readme"
+}
