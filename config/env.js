@@ -42,11 +42,12 @@ const env = {
   databaseUrlDirect: process.env.DATABASE_URL_UNPOOLED?.trim() || required('DATABASE_URL'),
   databaseUrlPooled: process.env.DATABASE_URL_POOLED?.trim() || required('DATABASE_URL'),
 
-  // Neon Auth (managed Better Auth). The URL already includes its path, e.g. …/neondb/auth
-  authBaseUrl: required('NEON_AUTH_BASE_URL').replace(/\/+$/, ''),
-  // Neon Auth only accepts calls from a trusted origin. Localhost is trusted by default.
-  // In production set this to the API's public origin and add it with `neon neon-auth domain add`.
-  authOrigin: process.env.AUTH_ORIGIN?.trim() || `http://localhost:${port}`,
+  // The one admin. The person who signs in with this VERIFIED email becomes the admin, but only while
+  // there is no admin yet. Leave it empty to set the admin by hand: npm run role -- <email> admin
+  adminEmail: process.env.ADMIN_EMAIL?.trim().toLowerCase() || '',
+
+  // Firebase Authentication. Only the project ID is needed to check a member's token.
+  firebaseProjectId: required('FIREBASE_PROJECT_ID'),
 
   // Object storage (S3-compatible). The AWS SDK also reads the AWS_* names by itself.
   s3Endpoint: required('AWS_ENDPOINT_URL_S3'),

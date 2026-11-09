@@ -1,6 +1,9 @@
 const workouts = require('../models/workout.model');
 const logs = require('../models/log.model');
 const profiles = require('../models/profile.model');
+const water = require('../models/water.model');
+const meals = require('../models/meal.model');
+const storage = require('../services/storage');
 const classes = require('../models/class.model');
 const { HttpError } = require('../middleware/errors');
 const { isUuid, readDay, readToday, readInt, addDays, weekdayOf, dayToMs, DAY_MS } = require('./validate');
@@ -20,15 +23,18 @@ async function home(req, res) {
   const weekEnd = addDays(weekStart, 6);
   const userId = req.user.id;
 
-  const [plan, stats, daysTrained, goal, categories, programs, todaysClasses] = await Promise.all([
+  const [plan, stats, daysTrained, settings, categories, programs, todaysClasses, waterToday, mealsToday] = await Promise.all([
     workouts.planFor(weekdayOf(today)),
     logs.statsForDay(userId, today),
     logs.daysTrained(userId, weekStart, weekEnd),
-    profiles.getWeeklyGoal(userId),
+    profiles.getSettings(userId),
     workouts.categories(),
     workouts.list({ programsOnly: true }),
     classes.gymToday().then((day) => classes.listForDate(day, userId)),
+    water.summaryForDay(userId, today),
+    meals.listForDay(userId, today),
   ]);
+  const goal = settings.weeklyGoal;
 
   res.json({
     today,
@@ -45,6 +51,9 @@ async function home(req, res) {
     categories,
     programs,
     classes: todaysClasses,
+    settings,
+    water: { ...waterToday, goalMl: settings.waterGoalMl },
+    meals: await Promise.all(mealsToday.map(withPhotoUrl)),
   });
 }
 
@@ -110,19 +119,26 @@ async function listLogs(req, res) {
   res.json({ logs: await logs.listRecent(req.user.id) });
 }
 
+/** GET /workout-logs/history?before=YYYY-MM-DD&limit=14: every day the member trained, newest first. */
+async function logHistory(req, res) {
+  const before = req.query.before ? readDay(req.query.before, 'before') : undefined;
+  const limit = req.query.limit ? readInt(Number(req.query.limit), 'limit', 1, 30) : 14;
+  const [page, summary] = await Promise.all([
+    logs.history(req.user.id, { before, limit }),
+    before ? Promise.resolve(null) : logs.lifetime(req.user.id), // totals only on the first page
+  ]);
+  res.json({ summary, ...page });
+}
+
 async function removeLog(req, res) {
   const removed = isUuid(req.params.id) && (await logs.remove(req.params.id, req.user.id));
   if (!removed) throw new HttpError(404, 'LOG_NOT_FOUND', 'Workout not found.');
   res.status(204).end();
 }
 
-async function getGoal(req, res) {
-  res.json({ weeklyGoal: await profiles.getWeeklyGoal(req.user.id) });
+/** A meal as the app sees it: the storage key is swapped for a short-lived link to the photo. */
+async function withPhotoUrl({ photoKey, ...meal }) {
+  return { ...meal, photoUrl: photoKey ? await storage.signDownload(photoKey) : null };
 }
 
-async function setGoal(req, res) {
-  const weeklyGoal = readInt(req.body?.weeklyGoal, 'weeklyGoal', 1, 7);
-  res.json({ weeklyGoal: await profiles.setWeeklyGoal(req.user.id, weeklyGoal) });
-}
-
-module.exports = { home, listWorkouts, listCategories, createLog, listLogs, removeLog, getGoal, setGoal };
+module.exports = { home, listWorkouts, listCategories, createLog, listLogs, logHistory, removeLog, withPhotoUrl };
