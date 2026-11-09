@@ -1,6 +1,6 @@
 const db = require('../services/db');
 const storage = require('../services/storage');
-const auth = require('../services/neon-auth');
+const auth = require('../services/firebase-auth');
 
 async function check(run) {
   const started = Date.now();
