@@ -9,11 +9,16 @@ const { health } = require('../controllers/health.controller');
 const profile = require('../controllers/profile.controller');
 const dietController = require('../controllers/diet.controller');
 const adminController = require('../controllers/admin.controller');
+const notify = require('../controllers/notification.controller');
 const { requireAuth, requireDietitian, requireAdmin } = require('../middleware/require-auth');
+const { adminLoginLimiter } = require('../middleware/rate-limit');
 
 const router = Router();
 
 router.get('/health', health);
+
+// The console admin's own sign-in (email + password from the API's .env)
+router.post('/staff/login', adminLoginLimiter, adminController.adminLogin);
 
 // Who is signed in? (sign-up, login and Google sign-in are done in the app, with Firebase)
 router.get('/auth/me', requireAuth, authController.me);
@@ -47,6 +52,19 @@ router.delete('/diet/items/:id/done', dietController.markUndone);
 
 // Who am I, for the web console's sign-in gate (works for any signed-in person)
 router.get('/staff/me', adminController.staffMe);
+
+// Push notifications: the admin and dietitians send from the console (a dietitian only to their own clients)
+router.use('/staff/notifications', requireDietitian);
+router.get('/staff/notifications', notify.sent);
+router.get('/staff/notifications/reach', notify.reach);
+router.post('/staff/notifications', notify.send);
+
+// Push notifications on the phone: register this phone, read the inbox, mute
+router.post('/me/push-token', notify.registerToken);
+router.post('/me/push-token/remove', notify.removeToken);
+router.put('/me/notification-settings', notify.setPreferences);
+router.get('/notifications', notify.inbox);
+router.post('/notifications/read', notify.markRead);
 
 // Dietitian tools: clients, their details, and their plans (a dietitian sees only their own clients)
 router.use('/dietitian', requireDietitian);

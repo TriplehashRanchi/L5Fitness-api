@@ -7,6 +7,7 @@ const db = require('./services/db');
 const routes = require('./routes');
 const { apiLimiter } = require('./middleware/rate-limit');
 const { notFound, errorHandler } = require('./middleware/errors');
+const adminSession = require('./services/admin-session');
 
 const app = express();
 
@@ -34,6 +35,7 @@ app.use(errorHandler);
 
 const server = app.listen(env.port, () => {
   console.log(`L5 Fitness API listening on http://localhost:${env.port}`);
+  adminSession.reportStatus();
 });
 
 // Finish in-flight requests and close database connections on stop / redeploy.

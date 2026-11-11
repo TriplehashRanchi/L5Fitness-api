@@ -10,7 +10,8 @@
     "migrate": "node scripts/migrate.js",
     "test:e2e": "node scripts/smoke.js",
     "seed": "node scripts/seed.js",
-    "role": "node scripts/set-role.js"
+    "role": "node scripts/set-role.js",
+    "firebase:key": "node scripts/set-firebase-key.js"
   },
   "repository": {
     "type": "git",

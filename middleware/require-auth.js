@@ -1,6 +1,6 @@
 const auth = require('../services/firebase-auth');
+const adminSession = require('../services/admin-session');
 const members = require('../models/member.model');
-const env = require('../config/env');
 const { HttpError } = require('./errors');
 
 function bearerToken(req) {
@@ -18,7 +18,7 @@ async function rememberMember(user) {
   const prev = seen.get(user.id);
   if (prev && prev.signature === signature && Date.now() - prev.at < REFRESH_MS) return;
   await members.touch(user);
-  await members.applyAccessRules(user, env.adminEmail);
+  await members.applyAccessRules(user);
   seen.set(user.id, { signature, at: Date.now() });
   if (seen.size > 5000) seen.delete(seen.keys().next().value);
 }
@@ -28,7 +28,14 @@ const forget = (userId) => seen.delete(userId);
 
 /** Rejects the request unless it carries a genuine Firebase ID token. Sets req.user. */
 async function requireAuth(req, res, next) {
-  const session = await auth.getSession(bearerToken(req));
+  const token = bearerToken(req);
+  // The console admin's own token (signed with a secret only this server has).
+  const admin = await adminSession.verify(token);
+  if (admin) {
+    req.user = admin;
+    return next();
+  }
+  const session = await auth.getSession(token);
   if (!session) throw new HttpError(401, 'UNAUTHORIZED', 'Please log in again.');
   req.user = session.user;
   await rememberMember(session.user);

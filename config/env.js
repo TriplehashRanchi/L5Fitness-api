@@ -42,12 +42,20 @@ const env = {
   databaseUrlDirect: process.env.DATABASE_URL_UNPOOLED?.trim() || required('DATABASE_URL'),
   databaseUrlPooled: process.env.DATABASE_URL_POOLED?.trim() || required('DATABASE_URL'),
 
-  // The one admin. The person who signs in with this VERIFIED email becomes the admin, but only while
-  // there is no admin yet. Leave it empty to set the admin by hand: npm run role -- <email> admin
+  // The ONE admin of the web console signs in with this email and password. Change them here, restart
+  // the API, and the new login applies. Leave ADMIN_PASSWORD empty to switch admin password login off.
   adminEmail: process.env.ADMIN_EMAIL?.trim().toLowerCase() || '',
+  adminPassword: process.env.ADMIN_PASSWORD ?? '',
+  // Signs the admin's 12-hour login. Any long random text; keep it secret. Changing it logs the admin out.
+  adminSessionSecret: process.env.ADMIN_SESSION_SECRET ?? '',
+  isProduction: process.env.NODE_ENV === 'production',
 
   // Firebase Authentication. Only the project ID is needed to check a member's token.
   firebaseProjectId: required('FIREBASE_PROJECT_ID'),
+  // OPTIONAL: lets this server send alerts to browsers (the web console) through Firebase Cloud Messaging.
+  // They come from a service-account key; add them with `npm run firebase:key -- <key.json>`.
+  firebaseClientEmail: process.env.FIREBASE_CLIENT_EMAIL?.trim() || '',
+  firebasePrivateKey: (process.env.FIREBASE_PRIVATE_KEY ?? '').replace(/\\n/g, '\n').trim(),
 
   // Object storage (S3-compatible). The AWS SDK also reads the AWS_* names by itself.
   s3Endpoint: required('AWS_ENDPOINT_URL_S3'),

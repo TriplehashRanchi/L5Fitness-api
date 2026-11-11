@@ -1,4 +1,5 @@
 const db = require('../services/db');
+const { ADMIN_ID } = require('../services/admin-session');
 
 /** Remember who this is (name, email, photo). Called when someone uses the app or the console. */
 async function touch({ id, name, email, image, emailVerified }) {
@@ -12,24 +13,12 @@ async function touch({ id, name, email, image, emailVerified }) {
 
 /**
  * Gives access that was prepared in advance, the moment the person signs in with a VERIFIED email:
- *   - the address in ADMIN_EMAIL becomes the admin (only while there is no admin yet)
- *   - an address the admin invited becomes a dietitian (the invitation is used up)
+ * an address the admin invited becomes a dietitian (the invitation is used up).
+ * Nobody becomes the admin this way: the admin is the account in the API's .env.
  */
-async function applyAccessRules({ id, email, emailVerified }, adminEmail) {
+async function applyAccessRules({ id, email, emailVerified }) {
   if (!emailVerified || !email) return;
   const address = email.toLowerCase();
-  if (adminEmail && address === adminEmail.toLowerCase()) {
-    try {
-      await db.query(
-        `update members set role = 'admin' where user_id = $1 and role <> 'admin'
-           and not exists (select 1 from members where role = 'admin')`,
-        [id]
-      );
-    } catch (err) {
-      if (err.code !== '23505') throw err; // two people raced for the one admin seat: the loser stays a member
-    }
-    return;
-  }
   await db.query(
     `with used as (delete from dietitian_invites where email = $1 returning email)
      update members set role = 'dietitian' where user_id = $2 and role = 'member' and exists (select 1 from used)`,
@@ -39,6 +28,8 @@ async function applyAccessRules({ id, email, emailVerified }, adminEmail) {
 
 /** { role, disabled } for a member (members never seen are plain, enabled members). */
 async function accessOf(userId) {
+  // The console admin signs in with the email and password in .env and has no database row.
+  if (userId === ADMIN_ID) return { role: 'admin', disabled: false };
   const { rows } = await db.query('select role, disabled from members where user_id = $1', [userId]);
   return rows[0] ?? { role: 'member', disabled: false };
 }
@@ -46,6 +37,7 @@ async function accessOf(userId) {
 const roleOf = async (userId) => (await accessOf(userId)).role;
 
 async function get(userId) {
+  if (userId === ADMIN_ID) return { id: ADMIN_ID, name: 'Admin', email: '', image: null, role: 'admin', disabled: false };
   const { rows } = await db.query(
     'select user_id as id, name, email, image, role, disabled from members where user_id = $1',
     [userId]

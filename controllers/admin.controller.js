@@ -1,5 +1,6 @@
 /** The admin's tools: dashboard, dietitians, member assignment, and the gym's catalog. */
 const admin = require('../models/admin.model');
+const adminSession = require('../services/admin-session');
 const members = require('../models/member.model');
 const { HttpError } = require('../middleware/errors');
 const { isUuid, readInt } = require('./validate');
@@ -209,6 +210,7 @@ async function deactivateClass(req, res) {
 /** GET /staff/me: any signed-in person. The console only lets in dietitians and the admin. */
 async function staffMe(req, res) {
   const who = (await members.get(req.user.id)) ?? { role: 'member', disabled: false };
+  if (req.user.localAdmin) who.disabled = false;
   res.json({
     staff: {
       id: req.user.id,
@@ -222,7 +224,24 @@ async function staffMe(req, res) {
   });
 }
 
+/** POST /staff/login { email, password }: the admin's sign-in (not for anyone else). */
+async function adminLogin(req, res) {
+  const { email, password } = req.body ?? {};
+  if (typeof email !== 'string' || typeof password !== 'string' || !email || !password || email.length > 254 || password.length > 200)
+    throw new HttpError(400, 'INVALID_LOGIN', 'Enter your email and password.');
+  const reason = adminSession.unavailableReason();
+  if (reason) {
+    console.error('[admin] login refused:', reason);
+    throw new HttpError(503, 'ADMIN_LOGIN_OFF', 'Admin password sign-in is not switched on for this server.');
+  }
+  const token = await adminSession.login(email, password);
+  // The same answer whether the email or the password was wrong.
+  if (!token) throw new HttpError(401, 'INVALID_LOGIN', 'Incorrect email or password.');
+  res.json({ token, expiresInHours: adminSession.SESSION_HOURS });
+}
+
 module.exports = {
+  adminLogin,
   overview, listDietitians, inviteDietitian, removeInvite, removeDietitian, updateDietitian,
   listMembers, setAssignment,
   listWorkouts, createWorkout, updateWorkout, deactivateWorkout, createCategory, weeklyPlan, setPlanDay,

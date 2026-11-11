@@ -123,6 +123,7 @@ async function main() {
   await fitness({ token, token2, userId: a1.localId });
   await wellness({ token, token2, userId: a1.localId });
   await profileAndDiet({ token, token2, userId: a1.localId });
+  await localAdmin({ userId: a1.localId });
   await staffAndAdmin({ token });
 
   console.log('\nUploads (object storage + Postgres)');
@@ -368,6 +369,61 @@ async function profileAndDiet({ token, token2, userId }) {
   check('the member is told sharing is off', (await api('GET', `/diet?day=${today}`, { token })).body.sharing === false);
 }
 
+/** The admin who signs in with the email and password in the API's .env. */
+async function localAdmin({ userId }) {
+  const env = require('../config/env');
+  const members = require('../models/member.model');
+  const { SignJWT } = await import('jose');
+  const secret = new TextEncoder().encode(env.adminSessionSecret);
+  const login = (email, password) => api('POST', '/staff/login', { body: { email, password } });
+  const forge = (claims, { key = secret, aud = 'console-admin', sub = 'local-admin', exp = '1h' } = {}) =>
+    new SignJWT(claims).setProtectedHeader({ alg: 'HS256' }).setSubject(sub).setIssuer('l5fitness-api').setAudience(aud).setIssuedAt().setExpirationTime(exp).sign(key);
+
+  console.log('\nAdmin sign-in (email and password from .env)');
+  if (!env.adminEmail || !env.adminPassword || env.adminSessionSecret.length < 32) {
+    console.log('  - skipped: ADMIN_EMAIL, ADMIN_PASSWORD and ADMIN_SESSION_SECRET are not all set in .env');
+    return;
+  }
+  check('no password → 400', (await login(env.adminEmail, '')).status === 400);
+  check('not text → 400', (await api('POST', '/staff/login', { body: { email: 5, password: {} } })).status === 400);
+  const wrongPw = await login(env.adminEmail, env.adminPassword + 'x');
+  const wrongEmail = await login('nobody@example.com', env.adminPassword);
+  check('wrong password → 401', wrongPw.status === 401 && !wrongPw.body.token);
+  check('wrong email → 401, the SAME message (does not reveal which was wrong)', wrongEmail.status === 401 && wrongEmail.body.error.message === wrongPw.body.error.message, wrongPw.body?.error?.message);
+  const shouty = await login(env.adminEmail.toUpperCase(), env.adminPassword);
+  check('the email is not case-sensitive', shouty.status === 200 && !!shouty.body.token);
+  const ok = await login(env.adminEmail, env.adminPassword);
+  check('correct email and password → a token valid for 12 hours', ok.status === 200 && ok.body.token.split('.').length === 3 && ok.body.expiresInHours === 12);
+  const t = ok.body.token;
+  const who = (await api('GET', '/staff/me', { token: t })).body.staff;
+  check('that token identifies the admin and is allowed into the console', who.role === 'admin' && who.allowed === true && who.email === env.adminEmail, who.email);
+  check('it opens the admin tools', (await api('GET', '/admin/overview', { token: t })).status === 200 && (await api('GET', '/admin/members', { token: t })).status === 200 && (await api('GET', '/admin/workouts', { token: t })).status === 200);
+  check('and the dietitian tools (the admin sees every client)', (await api('GET', '/dietitian/clients', { token: t })).status === 200);
+  check('the admin skips the member setup questions', (await api('GET', '/me/profile', { token: t })).body.completed === true);
+  const invited = `admin-token-${run}@example.com`;
+  made.inviteEmails.push(invited);
+  const inv = await api('POST', '/admin/dietitians', { token: t, body: { email: invited } });
+  check('the admin can invite a dietitian with it', inv.status === 201 && inv.body.result === 'invited');
+  check('and revoke the invitation', (await api('DELETE', `/admin/dietitian-invites/${encodeURIComponent(invited)}`, { token: t })).status === 204);
+  const [h, p, sig] = t.split('.');
+  check('a token with a changed signature is refused → 401', (await api('GET', '/admin/overview', { token: `${h}.${p}.${sig.slice(0, -2)}xx` })).status === 401);
+  check('a token with changed contents is refused → 401', (await api('GET', '/admin/overview', { token: `${h}.${Buffer.from(JSON.stringify({ sub: 'local-admin', role: 'admin', iss: 'l5fitness-api', aud: 'console-admin', exp: 9999999999 })).toString('base64url')}.${sig}` })).status === 401);
+  check('a token signed with ANOTHER secret is refused → 401', (await api('GET', '/admin/overview', { token: await forge({ role: 'admin' }, { key: new TextEncoder().encode('x'.repeat(40)) }) })).status === 401);
+  check('an expired token is refused → 401', (await api('GET', '/admin/overview', { token: await forge({ role: 'admin' }, { exp: Math.floor(Date.now() / 1000) - 60 }) })).status === 401);
+  check('a token for a different audience is refused → 401', (await api('GET', '/admin/overview', { token: await forge({ role: 'admin' }, { aud: 'something-else' }) })).status === 401);
+  check('a token for a different person is refused → 401', (await api('GET', '/admin/overview', { token: await forge({ role: 'admin' }, { sub: 'someone-else' }) })).status === 401);
+  check('a token without the admin role is refused → 401', (await api('GET', '/admin/overview', { token: await forge({ role: 'member' }) })).status === 401);
+  check('Firebase sign-ins still work next to it', (await api('GET', '/auth/me', { token: (createdFirebaseUsers[0] || {}).idToken })).status === 200);
+  await members.applyAccessRules({ id: userId, email: env.adminEmail, emailVerified: true });
+  check('a Google sign-in with the admin email does NOT become the admin', (await db.query("select count(*)::int n from members where role = 'admin'")).rows[0].n === 0);
+
+  const stranger = `attacker-${run}@example.com`;
+  const tries = [];
+  for (let i = 0; i < 11; i += 1) tries.push((await login(stranger, 'guess-' + i)).status);
+  check('10 wrong tries, then the 11th is blocked → 429', tries.slice(0, 10).every((x) => x === 401) && tries[10] === 429, tries.join(' '));
+  check("one person's wrong guesses do not lock the real admin out", (await login(env.adminEmail, env.adminPassword)).status === 200);
+}
+
 const made = { workouts: [], classes: [], categories: [], plan: null, inviteEmails: [] };
 
 /** Admin and dietitian access: roles, invitations, assignment, and the catalog tools. */
@@ -421,8 +477,8 @@ async function staffAndAdmin({ token }) {
   check('a member with a verified email is promoted at once', invB.body.result === 'promoted' && (await staff(dB)).role === 'dietitian');
   check('inviting an existing dietitian → 409', (await api('POST', '/admin/dietitians', { token: adm.token, body: { email: dB.email } })).status === 409);
   check("inviting the admin's email → 409", (await api('POST', '/admin/dietitians', { token: adm.token, body: { email: adm.email } })).status === 409);
-  await members.applyAccessRules({ id: m2.id, email: m2.email, emailVerified: true }, m2.email);
-  check('the ADMIN_EMAIL address does nothing while an admin already exists', (await staff(m2)).role === 'member');
+  await members.applyAccessRules({ id: m2.id, email: m2.email, emailVerified: true });
+  check('a verified Google sign-in never makes anyone the admin', (await staff(m2)).role === 'member');
   check('a dietitian cannot use admin tools → 403', (await api('GET', '/admin/dietitians', { token: dA.token })).status === 403);
   check('revoke a pending invitation', (await api('DELETE', `/admin/dietitian-invites/${encodeURIComponent(newDoc)}`, { token: adm.token })).status === 204 && (await api('DELETE', `/admin/dietitian-invites/${encodeURIComponent(newDoc)}`, { token: adm.token })).status === 404);
 
