@@ -2,7 +2,9 @@
 const admin = require('../models/admin.model');
 const adminSession = require('../services/admin-session');
 const members = require('../models/member.model');
+const coaching = require('../models/coaching.model');
 const { HttpError } = require('../middleware/errors');
+const notifyMember = require('../services/notify-member');
 const { isUuid, readInt } = require('./validate');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -37,6 +39,13 @@ async function overview(req, res) {
   res.json({ overview: await admin.overview() });
 }
 
+/** GET /admin/search?q=: a few members, dietitians, workouts and classes that match. Needs 2 letters or more. */
+async function search(req, res) {
+  const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 60) : '';
+  if (q.length < 2) throw new HttpError(400, 'QUERY_TOO_SHORT', 'Type at least 2 letters to search.');
+  res.json({ query: q, ...(await admin.search(q)) });
+}
+
 // ── Dietitians ────────────────────────────────────────────────────────────────────────────────
 
 async function listDietitians(req, res) {
@@ -61,9 +70,37 @@ async function removeInvite(req, res) {
 
 /** DELETE /admin/dietitians/:id: they become an ordinary member; their clients are unassigned. */
 async function removeDietitian(req, res) {
-  if (typeof req.params.id !== 'string' || !(await admin.demoteDietitian(req.params.id)))
-    throw new HttpError(404, 'DIETITIAN_NOT_FOUND', 'Dietitian not found.');
+  const id = req.params.id;
+  if (typeof id !== 'string' || !id || id.length > 128) throw new HttpError(404, 'DIETITIAN_NOT_FOUND', 'Dietitian not found.');
+  // A coach with clients cannot just be removed: the admin must say who takes the clients over.
+  const clients = await admin.clientCount(id);
+  const to = req.query.reassignTo;
+  if (clients > 0) {
+    if (typeof to !== 'string' || !to || to === id)
+      throw new HttpError(409, 'HAS_CLIENTS', `This dietitian has ${clients} clients. Choose who takes them over first.`);
+    const moved = await admin.handOver(id, to, req.user.id);
+    if (!moved) throw new HttpError(400, 'DIETITIAN_NOT_AVAILABLE', 'That dietitian does not exist or is disabled.');
+    notifyMember.clientsAssigned(to, moved, null, { id: req.user.id, role: 'admin', name: 'Admin' });
+  }
+  if (!(await admin.demoteDietitian(id))) throw new HttpError(404, 'DIETITIAN_NOT_FOUND', 'Dietitian not found.');
   res.status(204).end();
+}
+
+/** POST /admin/assignments/bulk { dietitianId, memberIds: [up to 100] }: put many members under one dietitian. */
+async function bulkAssign(req, res) {
+  const { dietitianId, memberIds } = req.body ?? {};
+  if (typeof dietitianId !== 'string' || !dietitianId || dietitianId.length > 128)
+    throw new HttpError(400, 'INVALID_VALUE', '"dietitianId" must be a dietitian id.');
+  if (!Array.isArray(memberIds) || !memberIds.length || memberIds.length > 100 ||
+      memberIds.some((m) => typeof m !== 'string' || !m || m.length > 128))
+    throw new HttpError(400, 'INVALID_VALUE', '"memberIds" must list 1 to 100 member ids.');
+  const result = await admin.bulkAssign([...new Set(memberIds)], dietitianId, req.user.id);
+  if (!result) throw new HttpError(400, 'DIETITIAN_NOT_AVAILABLE', 'That dietitian does not exist or is disabled.');
+  const who = await members.get(dietitianId);
+  const by = { id: req.user.id, role: 'admin', name: 'Admin' };
+  for (const memberId of new Set(memberIds)) notifyMember.assigned(memberId, who?.name, by);
+  notifyMember.clientsAssigned(dietitianId, result.assigned, null, by);
+  res.json({ dietitianId, ...result });
 }
 
 /** PATCH /admin/dietitians/:id { disabled } */
@@ -91,9 +128,17 @@ async function setAssignment(req, res) {
   const dietitianId = req.body?.dietitianId;
   if (dietitianId !== null && (typeof dietitianId !== 'string' || !dietitianId || dietitianId.length > 128))
     throw new HttpError(400, 'INVALID_VALUE', '"dietitianId" must be a dietitian id, or null to remove the assignment.');
+  // Saving the same dietitian again is not news for anybody.
+  const before = dietitianId ? (await coaching.status(req.params.id)).dietitianId : null;
   const result = await admin.setAssignment(req.params.id, dietitianId, req.user.id);
   if (result === 'no-member') throw new HttpError(404, 'MEMBER_NOT_FOUND', 'Member not found.');
   if (result === 'no-dietitian') throw new HttpError(400, 'DIETITIAN_NOT_AVAILABLE', 'That dietitian does not exist or is disabled.');
+  if (dietitianId && dietitianId !== before) {
+    const [who, member] = await Promise.all([members.get(dietitianId), members.get(req.params.id)]);
+    const by = { id: req.user.id, role: 'admin', name: 'Admin' };
+    notifyMember.assigned(req.params.id, who?.name, by);
+    notifyMember.clientsAssigned(dietitianId, 1, member?.name, by);
+  }
   res.json({ memberId: req.params.id, dietitianId });
 }
 
@@ -242,8 +287,8 @@ async function adminLogin(req, res) {
 
 module.exports = {
   adminLogin,
-  overview, listDietitians, inviteDietitian, removeInvite, removeDietitian, updateDietitian,
-  listMembers, setAssignment,
+  overview, search, listDietitians, inviteDietitian, removeInvite, removeDietitian, updateDietitian,
+  listMembers, setAssignment, bulkAssign,
   listWorkouts, createWorkout, updateWorkout, deactivateWorkout, createCategory, weeklyPlan, setPlanDay,
   listClasses, createClass, updateClass, deactivateClass, staffMe,
 };

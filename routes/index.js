@@ -10,6 +10,7 @@ const profile = require('../controllers/profile.controller');
 const dietController = require('../controllers/diet.controller');
 const adminController = require('../controllers/admin.controller');
 const notify = require('../controllers/notification.controller');
+const coach = require('../controllers/coach.controller');
 const { requireAuth, requireDietitian, requireAdmin } = require('../middleware/require-auth');
 const { adminLoginLimiter } = require('../middleware/rate-limit');
 
@@ -26,8 +27,12 @@ router.get('/auth/me', requireAuth, authController.me);
 // Everything below needs a logged-in member.
 router.use(requireAuth);
 
-// Home screen: plan, today's stats, weekly streak, programs and today's classes in one call
-router.get('/home', fitness.home);
+// Targets, settings and account deletion.
+router.get('/me/targets', coach.myTargets);
+router.get('/me/day', coach.myDay);
+router.get('/me/settings', wellness.getSettings);
+router.put('/me/settings', wellness.updateSettings);
+router.delete('/me', wellness.deleteAccountData);
 
 // Workout catalog
 router.get('/workouts', fitness.listWorkouts);
@@ -50,16 +55,16 @@ router.get('/diet', dietController.getMyDiet);
 router.put('/diet/items/:id/done', dietController.markDone);
 router.delete('/diet/items/:id/done', dietController.markUndone);
 
+// Home screen: plan, today's stats, weekly streak, programs and today's classes in one call
+router.get('/home', fitness.home);
+router.put('/me/steps', coach.saveSteps);
+router.get('/me/steps', coach.myStepHistory);
+
 // Who am I, for the web console's sign-in gate (works for any signed-in person)
 router.get('/staff/me', adminController.staffMe);
 
-// Push notifications: the admin and dietitians send from the console (a dietitian only to their own clients)
-router.use('/staff/notifications', requireDietitian);
-router.get('/staff/notifications', notify.sent);
-router.get('/staff/notifications/reach', notify.reach);
-router.post('/staff/notifications', notify.send);
-
-// Push notifications on the phone: register this phone, read the inbox, mute
+// Notifications are sent by the API itself when something happens (see services/notify-member.js).
+// Here: register this phone or browser, read the inbox, mute
 router.post('/me/push-token', notify.registerToken);
 router.post('/me/push-token/remove', notify.removeToken);
 router.put('/me/notification-settings', notify.setPreferences);
@@ -69,8 +74,16 @@ router.post('/notifications/read', notify.markRead);
 // Dietitian tools: clients, their details, and their plans (a dietitian sees only their own clients)
 router.use('/dietitian', requireDietitian);
 router.get('/dietitian/clients', dietController.listClients);
+router.post('/dietitian/clients/:id/accept', dietController.acceptClient);
+router.get('/dietitian/clients/:id/training', dietController.getTraining);
+router.put('/dietitian/clients/:id/training', dietController.saveTraining);
+router.delete('/dietitian/clients/:id/training', dietController.removeTraining);
 router.get('/dietitian/clients/:id', dietController.clientDetail);
 router.get('/dietitian/clients/:id/plan', dietController.clientPlan);
+router.get('/dietitian/clients/:id/targets', coach.getTargets);
+router.put('/dietitian/clients/:id/targets', coach.saveTargets);
+router.get('/dietitian/clients/:id/day', coach.clientDay);
+router.get('/dietitian/clients/:id/week', coach.clientWeek);
 router.post('/dietitian/clients/:id/plan', dietController.addItem);
 router.post('/dietitian/clients/:id/plan/copy', dietController.copyDay);
 router.delete('/dietitian/plan-items/:id', dietController.removeItem);
@@ -78,6 +91,7 @@ router.delete('/dietitian/plan-items/:id', dietController.removeItem);
 // Admin: the one admin manages dietitians, assignments and the gym's catalog
 router.use('/admin', requireAdmin);
 router.get('/admin/overview', adminController.overview);
+router.get('/admin/search', adminController.search);
 router.get('/admin/dietitians', adminController.listDietitians);
 router.post('/admin/dietitians', adminController.inviteDietitian);
 router.patch('/admin/dietitians/:id', adminController.updateDietitian);
@@ -85,6 +99,7 @@ router.delete('/admin/dietitians/:id', adminController.removeDietitian);
 router.delete('/admin/dietitian-invites/:email', adminController.removeInvite);
 router.get('/admin/members', adminController.listMembers);
 router.put('/admin/members/:id/assignment', adminController.setAssignment);
+router.post('/admin/assignments/bulk', adminController.bulkAssign);
 router.get('/admin/workouts', adminController.listWorkouts);
 router.post('/admin/workouts', adminController.createWorkout);
 router.put('/admin/workouts/:id', adminController.updateWorkout);
@@ -98,9 +113,6 @@ router.put('/admin/classes/:id', adminController.updateClass);
 router.delete('/admin/classes/:id', adminController.deactivateClass);
 
 // Settings (goals), water intake, meals with photos, and account deletion
-router.get('/me/settings', wellness.getSettings);
-router.put('/me/settings', wellness.updateSettings);
-router.delete('/me', wellness.deleteAccountData);
 router.post('/water', wellness.addWater);
 router.get('/water', wellness.listWater);
 router.delete('/water/:id', wellness.removeWater);

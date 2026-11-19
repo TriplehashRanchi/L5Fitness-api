@@ -1,3 +1,4 @@
+const coaching = require('../models/coaching.model');
 const workouts = require('../models/workout.model');
 const logs = require('../models/log.model');
 const profiles = require('../models/profile.model');
@@ -5,8 +6,11 @@ const water = require('../models/water.model');
 const meals = require('../models/meal.model');
 const storage = require('../services/storage');
 const classes = require('../models/class.model');
+const targetsModel = require('../models/targets.model');
+const diet = require('../models/diet.model');
+const activity = require('../models/activity.model');
 const { HttpError } = require('../middleware/errors');
-const { isUuid, readDay, readToday, readInt, addDays, weekdayOf, dayToMs, DAY_MS } = require('./validate');
+const { isUuid, readDay, readToday, readInt, addDays, dayToMs, DAY_MS } = require('./validate');
 
 const text = (value) => (typeof value === 'string' ? value.trim() : '');
 
@@ -23,8 +27,9 @@ async function home(req, res) {
   const weekEnd = addDays(weekStart, 6);
   const userId = req.user.id;
 
-  const [plan, stats, daysTrained, settings, categories, programs, todaysClasses, waterToday, mealsToday] = await Promise.all([
-    workouts.planFor(weekdayOf(today)),
+  const care = await coaching.status(userId);
+  const [plan, stats, daysTrained, rawSettings, categories, programs, todaysClasses, waterToday, mealsToday] = await Promise.all([
+    care.status === 'accepted' ? coaching.trainingFor(userId, today) : null,
     logs.statsForDay(userId, today),
     logs.daysTrained(userId, weekStart, weekEnd),
     profiles.getSettings(userId),
@@ -34,10 +39,18 @@ async function home(req, res) {
     water.summaryForDay(userId, today),
     meals.listForDay(userId, today),
   ]);
+  // The dietitian's targets win over the member's own settings.
+  const targets = await targetsModel.effective(userId);
+  const settings = { ...rawSettings, stepGoal: targets.steps, waterGoalMl: targets.waterMl, weeklyGoal: targets.weeklyWorkouts };
   const goal = settings.weeklyGoal;
+  const [dietToday, stepsToday] = await Promise.all([
+    care.status === 'accepted' ? diet.itemsForDay(userId, today) : [],
+    activity.stepsForDay(userId, today),
+  ]);
 
   res.json({
     today,
+    coaching: care,
     plan,
     stats,
     week: {
@@ -52,6 +65,16 @@ async function home(req, res) {
     programs,
     classes: todaysClasses,
     settings,
+    targets,
+    diet: {
+      total: dietToday.length,
+      done: dietToday.filter((i) => i.done).length,
+      next: dietToday.find((i) => !i.done) ?? null,
+      // today's whole meal list, so the app can show and tick it without another request
+      items: dietToday.map(({ id, mealSlot, title, details, calories, done }) => ({ id, mealSlot, title, details, calories, done })),
+    },
+    // what the server has for today (the phone's own count may be higher)
+    steps: { value: stepsToday, goal: settings.stepGoal },
     water: { ...waterToday, goalMl: settings.waterGoalMl },
     meals: await Promise.all(mealsToday.map(withPhotoUrl)),
   });
@@ -98,9 +121,11 @@ async function createLog(req, res) {
   let title;
   let calories;
   if (body.workoutId != null) {
-    const workout = isUuid(body.workoutId) ? await workouts.findById(body.workoutId) : null;
+    let workout = isUuid(body.workoutId) ? await workouts.findById(body.workoutId) : null;
+    const personal = !workout && isUuid(body.workoutId) ? await coaching.findTraining(body.workoutId, req.user.id) : null;
+    if (personal) workout = personal;
     if (!workout) throw new HttpError(404, 'WORKOUT_NOT_FOUND', 'Workout not found.');
-    workoutId = workout.id;
+    workoutId = personal ? null : workout.id;
     title = workout.title;
     // Worked out here, not sent by the app: the estimate for the part of the workout that was done.
     calories = Math.round((workout.kcal * durationMin) / workout.durationMin);

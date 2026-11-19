@@ -26,6 +26,12 @@ async function applyAccessRules({ id, email, emailVerified }) {
   );
 }
 
+/** True when this account was deleted (its sign-in token may still be valid for a while). */
+async function isDeleted(userId) {
+  const { rowCount } = await db.query('select 1 from deleted_accounts where user_id = $1', [userId]);
+  return rowCount > 0;
+}
+
 /** { role, disabled } for a member (members never seen are plain, enabled members). */
 async function accessOf(userId) {
   // The console admin signs in with the email and password in .env and has no database row.
@@ -59,10 +65,10 @@ async function setRoleByEmail(email, role) {
  */
 async function listClients({ search, dietitianId, limit = 100 }) {
   const params = [];
-  let where = "m.role = 'member' and b.share_with_dietitian";
+  let where = "m.role = 'member' and b.share_with_dietitian and exists (select 1 from client_assignments ca join members d on d.user_id = ca.dietitian_id and d.role = 'dietitian' and not d.disabled where ca.member_id = m.user_id and ca.accepted_at is not null)";
   if (dietitianId) {
     params.push(dietitianId);
-    where += ` and exists (select 1 from client_assignments a where a.member_id = m.user_id and a.dietitian_id = $${params.length})`;
+    where += ` and exists (select 1 from client_assignments a where a.member_id = m.user_id and a.dietitian_id = $${params.length} and a.accepted_at is not null)`;
   }
   if (search) {
     params.push(`%${search.replace(/[\\%_]/g, '\\$&')}%`);
@@ -72,6 +78,8 @@ async function listClients({ search, dietitianId, limit = 100 }) {
   const { rows } = await db.query(
     `select m.user_id as id, m.name, m.email, m.image, b.goal,
             b.weight_kg::float8 as "weightKg", b.target_weight_kg::float8 as "targetWeightKg",
+            (select d.name from client_assignments ca join members d on d.user_id = ca.dietitian_id
+               where ca.member_id = m.user_id and ca.accepted_at is not null order by ca.accepted_at limit 1) as "dietitianName",
             (select count(*)::int from diet_items i where i.member_id = m.user_id
                and i.plan_day between current_date - 6 and current_date) as "planned7",
             (select count(*)::int from diet_completions c join diet_items i on i.id = c.item_id
@@ -86,10 +94,10 @@ async function listClients({ search, dietitianId, limit = 100 }) {
 /** Is this member assigned to this dietitian? */
 async function isAssigned(memberId, dietitianId) {
   const { rowCount } = await db.query(
-    'select 1 from client_assignments where member_id = $1 and dietitian_id = $2',
+    'select 1 from client_assignments where member_id = $1 and dietitian_id = $2 and accepted_at is not null',
     [memberId, dietitianId]
   );
   return rowCount > 0;
 }
 
-module.exports = { touch, applyAccessRules, accessOf, roleOf, get, setRoleByEmail, listClients, isAssigned };
+module.exports = { isDeleted, touch, applyAccessRules, accessOf, roleOf, get, setRoleByEmail, listClients, isAssigned };

@@ -7,16 +7,37 @@
  */
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 
-const apiLimiter = rateLimit({
+const tooMany = (req, res) =>
+  res.status(429).json({
+    error: { code: 'TOO_MANY_ATTEMPTS', message: 'Too many attempts. Wait a few minutes and try again.' },
+  });
+
+// Per person: keyed on the sign-in token, so a whole gym on one wifi (one shared address) does not share one budget.
+const crypto = require('node:crypto');
+const tokenKey = (req) => {
+  const header = req.get('authorization');
+  return header ? `t:${crypto.createHash('sha256').update(header).digest('hex').slice(0, 24)}` : `ip:${ipKeyGenerator(req.ip)}`;
+};
+const userLimiter = rateLimit({
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   windowMs: 60_000,
-  limit: 300,
-  handler: (req, res) =>
-    res.status(429).json({
-      error: { code: 'TOO_MANY_ATTEMPTS', message: 'Too many attempts. Wait a few minutes and try again.' },
-    }),
+  limit: 600,
+  keyGenerator: tokenKey,
+  handler: tooMany,
 });
+
+// Per network address, much higher: stops one machine from spraying random tokens or paths.
+const ipLimiter = rateLimit({
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  windowMs: 60_000,
+  limit: 3000,
+  keyGenerator: (req) => `ip:${ipKeyGenerator(req.ip)}`,
+  handler: tooMany,
+});
+
+const apiLimiter = [ipLimiter, userLimiter];
 
 /**
  * Guessing the admin password: 10 WRONG tries per 15 minutes for one email from one address.

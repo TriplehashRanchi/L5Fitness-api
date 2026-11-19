@@ -42,7 +42,7 @@ function signUpload(key, { contentType, size }) {
 
 function signDownload(key) {
   return getSignedUrl(s3, new GetObjectCommand({ Bucket: bucket, Key: key }), {
-    expiresIn: DOWNLOAD_URL_TTL,
+    expiresIn: Math.min(DOWNLOAD_URL_TTL, 600),
   });
 }
 

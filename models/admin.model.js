@@ -21,6 +21,55 @@ async function overview() {
   return rows[0];
 }
 
+// ── Search ────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One search box for the whole console: members, dietitians, workouts and classes, a few of each.
+ * `hasClientPage` says whether the member's client page will open (the same rule as canManage).
+ */
+async function search(text, limit = 5) {
+  const like = `%${text.replace(/[\\%_]/g, '\\$&')}%`;
+  const starts = `${text.replace(/[\\%_]/g, '\\$&')}%`;
+  // Names that start with the text come first, then the rest by name.
+  const people = (role) =>
+    db.query(
+      `select m.user_id as id, m.name, m.email, m.image, m.disabled, d.name as "dietitianName",
+              (b.user_id is not null) as "setupDone", coalesce(b.share_with_dietitian, false) as sharing,
+              (coalesce(b.share_with_dietitian, false) and a.accepted_at is not null
+                 and d.role = 'dietitian' and not d.disabled) as "hasClientPage"
+       from members m
+       left join body_profiles b on b.user_id = m.user_id
+       left join client_assignments a on a.member_id = m.user_id
+       left join members d on d.user_id = a.dietitian_id
+       where m.role = $1 and (m.name ilike $2 or m.email ilike $2)
+       order by (m.name ilike $3 or m.email ilike $3) desc, lower(m.name), m.email limit $4`,
+      [role, like, starts, limit]
+    );
+  const [members, dietitians, workouts, classes] = await Promise.all([
+    people('member'),
+    people('dietitian'),
+    db.query(
+      `select w.id, w.title, c.name as "categoryName", w.level, w.duration_min as "durationMin", w.is_active as "isActive"
+       from workouts w join workout_categories c on c.slug = w.category_slug
+       where w.title ilike $1 or w.focus ilike $1 or w.coach ilike $1 or c.name ilike $1
+       order by w.is_active desc, (w.title ilike $2) desc, lower(w.title) limit $3`,
+      [like, starts, limit]
+    ),
+    db.query(
+      `select id, name, trainer, to_char(start_time, 'HH24:MI') as "startTime", is_active as "isActive"
+       from class_slots where name ilike $1 or trainer ilike $1
+       order by is_active desc, (name ilike $2) desc, lower(name) limit $3`,
+      [like, starts, limit]
+    ),
+  ]);
+  return {
+    members: members.rows.map(({ disabled, ...m }) => m),
+    dietitians: dietitians.rows.map(({ dietitianName, setupDone, sharing, hasClientPage, ...d }) => d),
+    workouts: workouts.rows,
+    classes: classes.rows,
+  };
+}
+
 // ── Dietitians ────────────────────────────────────────────────────────────────────────────────
 
 async function listDietitians() {
@@ -89,6 +138,7 @@ async function listMembers({ search, filter, limit, offset }) {
             (b.user_id is not null) as "setupDone", coalesce(b.share_with_dietitian, false) as sharing,
             b.goal, b.weight_kg::float8 as "weightKg", b.target_weight_kg::float8 as "targetWeightKg",
             d.user_id as "dietitianId", d.name as "dietitianName", d.email as "dietitianEmail",
+            a.accepted_at as "acceptedAt",
             (select count(*)::int from workout_logs w where w.user_id = m.user_id and w.local_day >= current_date - 6) as "workouts7",
             (select count(*)::int from diet_items i where i.member_id = m.user_id and i.plan_day between current_date - 6 and current_date) as "planned7",
             (select count(*)::int from diet_completions c join diet_items i on i.id = c.item_id
@@ -116,12 +166,45 @@ async function setAssignment(memberId, dietitianId, adminId) {
   const d = await db.query("select 1 from members where user_id = $1 and role = 'dietitian' and not disabled", [dietitianId]);
   if (!d.rowCount) return 'no-dietitian';
   await db.query(
-    `insert into client_assignments (member_id, dietitian_id, assigned_by) values ($1, $2, $3)
-     on conflict (member_id) do update set dietitian_id = excluded.dietitian_id, assigned_by = excluded.assigned_by, assigned_at = now()`,
+    `insert into client_assignments (member_id, dietitian_id, assigned_by, accepted_at) values ($1, $2, $3, now())
+     on conflict (member_id) do update set dietitian_id = excluded.dietitian_id, assigned_by = excluded.assigned_by,
+       assigned_at = case when client_assignments.dietitian_id = excluded.dietitian_id then client_assignments.assigned_at else now() end,
+       accepted_at = coalesce(client_assignments.accepted_at, now())`,
     [memberId, dietitianId, adminId]
   );
   return 'ok';
 }
+
+/** Assigns many members to one dietitian in one go. Returns { assigned, skipped }. */
+async function bulkAssign(memberIds, dietitianId, adminId) {
+  return db.transaction(async (client) => {
+    const d = await client.query("select 1 from members where user_id = $1 and role = 'dietitian' and not disabled", [dietitianId]);
+    if (!d.rowCount) return null;
+    const { rowCount } = await client.query(
+      `insert into client_assignments (member_id, dietitian_id, assigned_by, accepted_at)
+       select m.user_id, $2, $3, now() from members m where m.user_id = any($1::text[]) and m.role = 'member'
+       on conflict (member_id) do update set dietitian_id = excluded.dietitian_id, assigned_by = excluded.assigned_by,
+         assigned_at = case when client_assignments.dietitian_id = excluded.dietitian_id then client_assignments.assigned_at else now() end,
+         accepted_at = coalesce(client_assignments.accepted_at, now())`,
+      [memberIds, dietitianId, adminId]
+    );
+    return { assigned: rowCount, skipped: memberIds.length - rowCount };
+  });
+}
+
+/** Moves all of one dietitian's clients to another (used when a coach leaves). Returns how many moved. */
+async function handOver(fromId, toId, adminId) {
+  const { rowCount } = await db.query(
+    `update client_assignments set dietitian_id = $2, assigned_by = $3, assigned_at = now()
+     where dietitian_id = $1
+       and exists (select 1 from members d where d.user_id = $2 and d.role = 'dietitian' and not d.disabled)`,
+    [fromId, toId, adminId]
+  );
+  return rowCount;
+}
+
+const clientCount = async (dietitianId) =>
+  (await db.query('select count(*)::int n from client_assignments where dietitian_id = $1', [dietitianId])).rows[0].n;
 
 // ── Workout catalog ───────────────────────────────────────────────────────────────────────────
 
@@ -251,7 +334,8 @@ async function setClassActive(id, active) {
 }
 
 module.exports = {
-  overview, listDietitians, inviteDietitian, removeInvite, demoteDietitian, setDisabled,
+  bulkAssign, handOver, clientCount,
+  overview, search, listDietitians, inviteDietitian, removeInvite, demoteDietitian, setDisabled,
   listMembers, setAssignment,
   listWorkouts, getWorkout, categories, createCategory, createWorkout, updateWorkout, setWorkoutActive,
   weeklyPlan, setPlanDay, listClasses, createClass, updateClass, setClassActive,

@@ -16,6 +16,8 @@ const REFRESH_MS = 10 * 60_000;
 async function rememberMember(user) {
   const signature = `${user.name}|${user.email}|${user.image}`;
   const prev = seen.get(user.id);
+  // First time this server sees them (or after a delete): a deleted account must not come back.
+  if (!prev && (await members.isDeleted(user.id))) throw new HttpError(401, 'ACCOUNT_DELETED', 'This account was deleted.');
   if (prev && prev.signature === signature && Date.now() - prev.at < REFRESH_MS) return;
   await members.touch(user);
   await members.applyAccessRules(user);
@@ -38,7 +40,13 @@ async function requireAuth(req, res, next) {
   const session = await auth.getSession(token);
   if (!session) throw new HttpError(401, 'UNAUTHORIZED', 'Please log in again.');
   req.user = session.user;
-  await rememberMember(session.user);
+  // Deleting the account must stay repeatable (a retry after a partial delete).
+  if (!(req.method === 'DELETE' && req.path === '/me')) {
+    await rememberMember(session.user);
+    // A disabled account stops working at once, not when its token expires.
+    if ((await members.accessOf(session.user.id)).disabled)
+      throw new HttpError(403, 'ACCOUNT_DISABLED', 'This account has been disabled. Please contact the gym desk.');
+  }
   next();
 }
 

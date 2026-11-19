@@ -4,6 +4,7 @@ const water = require('../models/water.model');
 const meals = require('../models/meal.model');
 const uploads = require('../models/upload.model');
 const account = require('../models/account.model');
+const targetsModel = require('../models/targets.model');
 const storage = require('../services/storage');
 const { forget } = require('../middleware/require-auth');
 const { withPhotoUrl } = require('./fitness.controller');
@@ -15,7 +16,12 @@ const MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack'];
 // ── Settings ──────────────────────────────────────────────────────────────────────────────────
 
 async function getSettings(req, res) {
-  res.json({ settings: await profiles.getSettings(req.user.id) });
+  const targets = await targetsModel.effective(req.user.id);
+  const settings = await profiles.getSettings(req.user.id);
+  res.json({
+    settings: { ...settings, stepGoal: targets.steps, waterGoalMl: targets.waterMl, weeklyGoal: targets.weeklyWorkouts },
+    prescribed: targets.prescribed, // true = set by the dietitian, cannot be changed here
+  });
 }
 
 /** PUT /me/settings: send only what changed, e.g. { "stepGoal": 8000 }. */
@@ -27,6 +33,10 @@ async function updateSettings(req, res) {
   if (body.waterGoalMl !== undefined) fields.waterGoalMl = readInt(body.waterGoalMl, 'waterGoalMl', 500, 10_000);
   if (!Object.keys(fields).length)
     throw new HttpError(400, 'NOTHING_TO_UPDATE', 'Send at least one setting to change.');
+  const { prescribed } = await targetsModel.effective(req.user.id);
+  const locked = { weeklyGoal: prescribed.weeklyWorkouts, stepGoal: prescribed.steps, waterGoalMl: prescribed.waterMl };
+  for (const key of Object.keys(fields))
+    if (locked[key]) throw new HttpError(403, 'TARGET_SET_BY_DIETITIAN', 'Your dietitian set this target. Ask them to change it.');
   res.json({ settings: await profiles.updateSettings(req.user.id, fields) });
 }
 
@@ -37,18 +47,18 @@ async function addWater(req, res) {
   const amountMl = readInt(req.body?.amountMl, 'amountMl', 1, 2000);
   const day = readToday(req.body?.day, 'day');
   const entry = await water.add({ userId: req.user.id, amountMl, day });
-  const settings = await profiles.getSettings(req.user.id);
-  res.status(201).json({ entry, water: { ...(await water.summaryForDay(req.user.id, day)), goalMl: settings.waterGoalMl } });
+  const goalMl = (await targetsModel.effective(req.user.id)).waterMl;
+  res.status(201).json({ entry, water: { ...(await water.summaryForDay(req.user.id, day)), goalMl } });
 }
 
 /** GET /water?day=YYYY-MM-DD */
 async function listWater(req, res) {
   const day = readDay(req.query.day, 'day');
-  const settings = await profiles.getSettings(req.user.id);
+  const goalMl = (await targetsModel.effective(req.user.id)).waterMl;
   res.json({
     day,
     entries: await water.listForDay(req.user.id, day),
-    water: { ...(await water.summaryForDay(req.user.id, day)), goalMl: settings.waterGoalMl },
+    water: { ...(await water.summaryForDay(req.user.id, day)), goalMl },
   });
 }
 
@@ -57,8 +67,8 @@ async function removeWater(req, res) {
   const day = readDay(req.query.day, 'day');
   if (!isUuid(req.params.id) || !(await water.remove(req.params.id, req.user.id)))
     throw new HttpError(404, 'WATER_NOT_FOUND', 'That entry was not found.');
-  const settings = await profiles.getSettings(req.user.id);
-  res.json({ water: { ...(await water.summaryForDay(req.user.id, day)), goalMl: settings.waterGoalMl } });
+  const goalMl = (await targetsModel.effective(req.user.id)).waterMl;
+  res.json({ water: { ...(await water.summaryForDay(req.user.id, day)), goalMl } });
 }
 
 // ── Meals ─────────────────────────────────────────────────────────────────────────────────────

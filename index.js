@@ -33,6 +33,9 @@ app.use(routes);
 app.use(notFound);
 app.use(errorHandler);
 
+if (env.isProduction && !env.trustProxy)
+  console.warn('[config] TRUST_PROXY is not set. Behind a host proxy every user would share one address for rate limits. Set TRUST_PROXY=1.');
+
 const server = app.listen(env.port, () => {
   console.log(`L5 Fitness API listening on http://localhost:${env.port}`);
   adminSession.reportStatus();

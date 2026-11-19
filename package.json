@@ -8,6 +8,7 @@
     "dev": "node --watch index.js",
     "build": "node scripts/build.js",
     "migrate": "node scripts/migrate.js",
+    "test:coaching": "node --test tests/coaching.test.js tests/targets.test.js",
     "test:e2e": "node scripts/smoke.js",
     "seed": "node scripts/seed.js",
     "role": "node scripts/set-role.js",
