@@ -59,6 +59,7 @@ router.delete('/diet/items/:id/done', dietController.markUndone);
 router.get('/home', fitness.home);
 router.put('/me/steps', coach.saveSteps);
 router.get('/me/steps', coach.myStepHistory);
+router.get('/me/activity', coach.myActivity);
 
 // Who am I, for the web console's sign-in gate (works for any signed-in person)
 router.get('/staff/me', adminController.staffMe);

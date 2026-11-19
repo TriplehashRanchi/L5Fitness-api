@@ -46,6 +46,18 @@ async function myStepHistory(req, res) {
   res.json({ from, to, goal: goal.steps, prescribed: goal.prescribed.steps, days: rows });
 }
 
+/**
+ * GET /me/activity?to=YYYY-MM-DD&days=30: one row per day up to `to`, oldest first, with the member's steps,
+ * water, meals and workouts, plus the goals to measure them against. Powers the month view on the Activity page.
+ */
+async function myActivity(req, res) {
+  const to = readDay(req.query.to, 'to');
+  const days = req.query.days === undefined ? 30 : readInt(Number(req.query.days), 'days', 1, 92);
+  const from = addDays(to, -(days - 1));
+  const [goal, rows] = await Promise.all([targets.effective(req.user.id), activity.range(req.user.id, from, to)]);
+  res.json({ from, to, goals: { steps: goal.steps, waterMl: goal.waterMl }, days: rows });
+}
+
 /** GET /me/targets: what the dietitian prescribed (falls back to the member's own settings). */
 async function myTargets(req, res) {
   res.json({ targets: await targets.effective(req.user.id) });
@@ -152,4 +164,4 @@ async function clientWeek(req, res) {
   res.json({ weekStart, targets: goal, days });
 }
 
-module.exports = { saveSteps, myStepHistory, myDay, myTargets, getTargets, saveTargets, clientDay, clientWeek };
+module.exports = { saveSteps, myStepHistory, myActivity, myDay, myTargets, getTargets, saveTargets, clientDay, clientWeek };
