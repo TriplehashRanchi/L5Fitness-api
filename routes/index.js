@@ -11,6 +11,7 @@ const dietController = require('../controllers/diet.controller');
 const adminController = require('../controllers/admin.controller');
 const notify = require('../controllers/notification.controller');
 const coach = require('../controllers/coach.controller');
+const chat = require('../controllers/chat.controller');
 const { requireAuth, requireDietitian, requireAdmin } = require('../middleware/require-auth');
 const { adminLoginLimiter } = require('../middleware/rate-limit');
 
@@ -55,6 +56,10 @@ router.get('/diet', dietController.getMyDiet);
 router.put('/diet/items/:id/done', dietController.markDone);
 router.delete('/diet/items/:id/done', dietController.markUndone);
 
+// Chat with the member's dietitian
+router.get('/chat', chat.myChat);
+router.post('/chat', chat.sendMine);
+
 // Home screen: plan, today's stats, weekly streak, programs and today's classes in one call
 router.get('/home', fitness.home);
 router.put('/me/steps', coach.saveSteps);
@@ -75,6 +80,9 @@ router.post('/notifications/read', notify.markRead);
 // Dietitian tools: clients, their details, and their plans (a dietitian sees only their own clients)
 router.use('/dietitian', requireDietitian);
 router.get('/dietitian/clients', dietController.listClients);
+router.get('/dietitian/chat/unread', chat.unread);
+router.get('/dietitian/clients/:id/chat', chat.clientChat);
+router.post('/dietitian/clients/:id/chat', chat.sendToClient);
 router.post('/dietitian/clients/:id/accept', dietController.acceptClient);
 router.get('/dietitian/clients/:id/training', dietController.getTraining);
 router.put('/dietitian/clients/:id/training', dietController.saveTraining);

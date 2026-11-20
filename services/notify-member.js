@@ -1,7 +1,7 @@
 /**
  * Every notification is sent from here, by itself, when something happens: nobody writes them by hand.
  * To a member: a dietitian was assigned, the diet plan, exercise plan or targets changed.
- * To a dietitian: the admin assigned them clients. Never throws.
+ * To a dietitian: the admin assigned them clients. Either way: a new chat message. Never throws.
  */
 const notifications = require('../models/notification.model');
 const push = require('./push');
@@ -55,7 +55,8 @@ function dietUpdated(memberId, dietitian) {
   void tell(memberId, {
     title: 'Your diet plan was updated',
     body: 'Your dietitian added new meals. Open the app to see your plan.',
-    screen: 'diet',
+    // Home shows the day's meals; the member's Diet tab is now their chat.
+    screen: 'home',
     sender: fromDietitian(dietitian),
   });
 }
@@ -95,4 +96,40 @@ function clientsAssigned(dietitianId, count, name, admin) {
   });
 }
 
-module.exports = { assigned, dietUpdated, trainingUpdated, targetsUpdated, clientsAssigned };
+const preview = (text) => (text.length > 120 ? `${text.slice(0, 117)}…` : text);
+
+// A chat alert at most once every two minutes per thread and direction: the first message of a burst
+// tells them, the rest are waiting in the chat when they open it.
+const CHAT_QUIET_MS = 2 * 60_000;
+const lastChatPing = new Map();
+function chatDue(key) {
+  const now = Date.now();
+  if (now - (lastChatPing.get(key) ?? 0) < CHAT_QUIET_MS) return false;
+  lastChatPing.set(key, now);
+  if (lastChatPing.size > 5000) lastChatPing.delete(lastChatPing.keys().next().value);
+  return true;
+}
+
+/** To a member: their dietitian wrote in the chat. Opens the Diet tab, which is the chat. */
+function chatFromDietitian(memberId, dietitian, text) {
+  if (!chatDue(`to-member:${memberId}`)) return;
+  void tell(memberId, {
+    title: `${(dietitian.name || 'Your dietitian').slice(0, 40)} sent a message`,
+    body: preview(text),
+    screen: 'diet',
+    sender: fromDietitian(dietitian),
+  });
+}
+
+/** To a dietitian: one of their clients wrote in the chat. */
+function chatFromMember(dietitianId, member, text) {
+  if (!dietitianId || !chatDue(`to-dietitian:${member.id}`)) return;
+  void tell(dietitianId, {
+    title: `${(member.name || 'A client').slice(0, 40)} sent a message`,
+    body: preview(text),
+    screen: 'diet',
+    sender: { id: member.id, role: 'member', name: member.name || 'A client' },
+  });
+}
+
+module.exports = { assigned, dietUpdated, trainingUpdated, targetsUpdated, clientsAssigned, chatFromDietitian, chatFromMember };

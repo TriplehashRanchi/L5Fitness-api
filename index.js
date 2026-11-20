@@ -8,6 +8,8 @@ const routes = require('./routes');
 const { apiLimiter } = require('./middleware/rate-limit');
 const { notFound, errorHandler } = require('./middleware/errors');
 const adminSession = require('./services/admin-session');
+const realtime = require('./services/realtime');
+const { canManage } = require('./controllers/diet.controller');
 
 const app = express();
 
@@ -41,9 +43,14 @@ const server = app.listen(env.port, () => {
   adminSession.reportStatus();
 });
 
+// Live chat (Socket.IO) shares the API's port; it answers /socket.io itself, before Express.
+realtime.attach(server, { canManage });
+
 // Finish in-flight requests and close database connections on stop / redeploy.
 function shutdown(signal) {
   console.log(`${signal} received, shutting down`);
+  // Closing Socket.IO also closes the HTTP server it is attached to.
+  void realtime.close();
   server.close(async () => {
     await db.pool.end().catch(() => {});
     process.exit(0);

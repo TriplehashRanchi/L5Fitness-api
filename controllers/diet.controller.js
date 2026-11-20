@@ -194,4 +194,4 @@ async function removeTraining(req, res) {
   res.status(204).end();
 }
 
-module.exports = { requireClient, acceptClient, getTraining, saveTraining, removeTraining, getMyDiet, markDone, markUndone, listClients, clientDetail, clientPlan, addItem, removeItem, copyDay };
+module.exports = { canManage, requireClient, acceptClient, getTraining, saveTraining, removeTraining, getMyDiet, markDone, markUndone, listClients, clientDetail, clientPlan, addItem, removeItem, copyDay };
